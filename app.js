@@ -79,6 +79,7 @@ DatabaseClient.connect(DatabaseURL, { useUnifiedTopology: true, useNewUrlParser:
 				socket.on("ChatRoomSearch", function(data) { ChatRoomSearch(data, socket) });
 				socket.on("ChatRoomCreate", function(data) { ChatRoomCreate(data, socket) });
 				socket.on("ChatRoomJoin", function(data) { ChatRoomJoin(data, socket) });
+				socket.on("ChatRoomJoinOrCreate", function(data) {ChatRoomJoinOrCreate(data, socket);});
 				socket.on("ChatRoomLeave", function() { ChatRoomLeave(socket) });
 				socket.on("ChatRoomChat", function(data) { ChatRoomChat(data, socket) });
 				socket.on("ChatRoomCharacterUpdate", function(data) { ChatRoomCharacterUpdate(data, socket) });
@@ -382,6 +383,11 @@ function AccountGet(ID) {
 			return Account[P];
 	return null;
 }
+function AccountGetOrThrow(ID){
+	var A = AccountGet(ID);
+	if(null == A) throw "AccountError";
+	return A;
+}
 
 // When a user searches for a chat room
 function ChatRoomSearch(data, socket) {
@@ -540,6 +546,82 @@ function ChatRoomJoin(data, socket) {
 
 	} else socket.emit("ChatRoomSearchResponse", "InvalidRoomData");
 
+}
+
+//going to a room directly from another room
+function ChatRoomJoinOrCreate(data, socket){
+	var Acc;
+	try{
+		var NextRoom;
+		var Acc = AccountGetOrThrow(socket.id);
+
+		var NextRoom = ChatRoom.find(function (el) {return el.Name.toUpperCase().trim() == data.Name.toUpperCase()});
+		if(null != NextRoom){
+			ChatRoomJoinValidateOrThrow(Acc, NextRoom, data.AdditionalCharacters.length);
+			ChatRoomRemove(Acc, "ServerLeave", []);
+			ChatRoomJoinExisting(Acc, NextRoom);
+		}else{
+			ChatRoomCreateValidateOrThrow(Acc, data.RoomData);
+			ChatRoomRemove(Acc, "ServerLeave", []);
+			var NextRoom = ChatRoomInitFromData(Acc, data.RoomData);
+			ChatRoom.push(NextRoom);
+			Acc.ChatRoom = NextRoom;
+			NextRoom.Account.push(Acc);
+			console.log("Chat room (" + ChatRoom.length.toString() + ") " + data.Name + " created by account " + Acc.AccountName + ", ID: " + socket.id.toString());
+			socket.emit("ChatRoomCreateResponse", "ChatRoomCreated");
+			ChatRoomSync(NextRoom, Acc.MemberNumber);
+		}
+
+		for(var i = 0; i < data.AdditionalCharacters; i++){
+			var AdditionalAccount = Account.find(function(el){return el.MemberNumber == data.AdditionalCharacters[i];});
+			if(AdditionalAccount.Owner != Acc.MemberNumber) continue;
+			ChatRoomRemove(AdditionalAccount, "ServerLeave", []);
+			ChatRoomJoinExisting(AdditionalAccount, NextRoom);
+		}
+	}catch(error){
+		socket.emit("ChatRoomMessage", {Sender: (Acc != null ? Acc.MemberNumber : -1), Content: ""+error, Type: "Whisper" } );
+	}
+}
+function ChatRoomJoinExisting(Acc, Room){
+	Acc.ChatRoom = Room;
+	Room.Account.push(Acc);
+	Acc.Socket.emit("ChatRoomSearchResponse", "JoinedRoom");
+	ChatRoomSync(Room, Acc.MemberNumber);
+	ChatRoomMessage(Room, Acc.MemberNumber, "ServerEnter", "Action", null, [{Tag: "SourceCharacter", Text: Acc.Name, MemberNumber: Acc.MemberNumber}]);
+}
+function ChatRoomCreateValidateOrThrow(Acc, data){
+	if (data == null || (typeof data != "object") || (data.Name == null) || (data.Description == null) || (data.Background == null) || (data.Private == null)
+			|| (typeof data.Name != "string") || (typeof data.Description != "string") || (typeof data.Background != "string") || (typeof data.Private != "boolean"))
+		throw "InvalidRoomData";
+	data.Name = data.Name.trim();
+	var LN = /^[a-zA-Z0-9 ]+$/;
+	if (! data.Name.match(LN) || (data.Name.length <= 1) || (data.Name.length > 20) || (data.Description.length >= 100) || (data.Background.length >= 100))
+		throw "InvalidRoomData";
+}
+function ChatRoomJoinValidateOrThrow(Acc, Room, characterCount){
+	if(characterCount < 1) characterCount = 1;
+	if (Acc.Environment != Room.Environment) throw "InvalidEnvironment";
+	if (Room.Account.length + characterCount > Room.Limit) throw "RoomFull";
+	if (Room.Ban.indexOf(Acc.MemberNumber) >= 0) throw "RoomBanned";
+	if (Room.Locked && Room.Admin.indexOf(Acc.MemberNumber) < 0) throw "RoomLocked";
+	return true;
+}
+function ChatRoomInitFromData(Acc, data){
+	return {
+		Name: data.Name,
+		Description: data.Description,
+		Background: data.Background,
+		Limit: ((data.Limit == null) || (typeof data.Limit !== "string") || isNaN(parseInt(data.Limit)) || (parseInt(data.Limit) < 2) || (parseInt(data.Limit) > 10)) ? 10 : parseInt(data.Limit),
+		Private: data.Private || false,
+		Locked : data.Locked || false,
+		Environment: Acc.Environment,
+		Space: ((data.Space != null) && (typeof data.Space === "string") && (data.Space.length <= 100)) ? data.Space : "",
+		Creator: Acc.Name,
+		Creation: CommonTime(),
+		Account: [],
+		Ban: [],
+		Admin: [Acc.MemberNumber]
+	}
 }
 
 // Removes a player from a room
