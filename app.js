@@ -741,7 +741,7 @@ function ChatRoomCharacterUpdate(data, socket) {
 			if (Acc.ChatRoom.Ban.indexOf(Acc.MemberNumber) < 0)
 				for (var A = 0; ((Acc.ChatRoom != null) && (A < Acc.ChatRoom.Account.length)); A++)
 					if ((Acc.ChatRoom.Account[A].ID == data.ID) && ChatRoomGetAllowItem(Acc, Acc.ChatRoom.Account[A]))
-						if ((typeof data.Appearance === "object") && (JSON.stringify(data.Appearance).length < 180000)) {
+						if ((typeof data.Appearance === "object") && Array.isArray(data.Appearance) && (data.Appearance.length >= 5) && (JSON.stringify(data.Appearance).length < 180000)) {
 							Database.collection("Accounts").updateOne({ AccountName : Acc.ChatRoom.Account[A].AccountName }, { $set: { Appearance: data.Appearance } }, function(err, res) { if (err) throw err; });
 							Acc.ChatRoom.Account[A].Appearance = data.Appearance;
 							Acc.ChatRoom.Account[A].ActivePose = data.ActivePose;
@@ -792,6 +792,24 @@ function ChatRoomAdmin(data, socket) {
 						return;
 					} else socket.emit("ChatRoomUpdateResponse", "InvalidRoomData");
 				} else socket.emit("ChatRoomUpdateResponse", "InvalidRoomData");
+
+			// An administrator can swap the position of two characters in a room
+			if ((data.Action == "Swap") && (data.TargetMemberNumber != null) && (typeof data.TargetMemberNumber === "number") && (data.DestinationMemberNumber != null) && (typeof data.DestinationMemberNumber === "number") && (data.TargetMemberNumber != data.DestinationMemberNumber)) {
+				var TargetAccountIndex = Acc.ChatRoom.Account.findIndex(x => x.MemberNumber == data.TargetMemberNumber);
+				var DestinationAccountIndex = Acc.ChatRoom.Account.findIndex(x => x.MemberNumber == data.DestinationMemberNumber);
+				if ((TargetAccountIndex < 0) || (DestinationAccountIndex < 0)) return;
+				var TargetAccount = Acc.ChatRoom.Account[TargetAccountIndex];
+				var DestinationAccount = Acc.ChatRoom.Account[DestinationAccountIndex];
+				var Dictionary = [];
+				Dictionary.push({ Tag: "SourceCharacter", Text: Acc.Name, MemberNumber: Acc.MemberNumber });
+				Dictionary.push({ Tag: "TargetCharacterName", Text: TargetAccount.Name, MemberNumber: TargetAccount.MemberNumber });
+				Dictionary.push({ Tag: "DestinationCharacterName", Text: DestinationAccount.Name, MemberNumber: DestinationAccount.MemberNumber });
+				ChatRoomMessage(Acc.ChatRoom, Acc.MemberNumber, "ServerSwap", "Action", null, Dictionary);
+				Acc.ChatRoom.Account[TargetAccountIndex] = DestinationAccount;
+				Acc.ChatRoom.Account[DestinationAccountIndex] = TargetAccount;
+				ChatRoomSync(Acc.ChatRoom, Acc.MemberNumber);
+				return;
+			}
 
 			// If the account to act upon is in the room, an administrator can ban, kick, move, promote or demote him
 			for (var A = 0; A < Acc.ChatRoom.Account.length; A++)
